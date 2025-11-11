@@ -8,8 +8,13 @@ import torch
 from pytorch_lightning import seed_everything
 from sklearn.metrics import roc_auc_score
 
-from demo.kgrs import KGRS
 
+import os
+import sys
+
+# os.path.join(..., '..') -> go up one level to (.../KG-BASED_RECOMM...)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from demo.kgrs import KGRS
 
 
 def nDCG(sorted_items, pos_item, train_pos_item, k=5):
@@ -35,12 +40,21 @@ def nDCG(sorted_items, pos_item, train_pos_item, k=5):
 
 
 def load_data():
-    train_pos, train_neg = np.load("../data/train_pos.npy"), np.load(
-        "../data/train_neg.npy")
+    train_pos, train_neg = np.load("data/train_pos.npy"), np.load(
+        "data/train_neg.npy")
+    
+    np.random.shuffle(train_pos)
+    np.random.shuffle(train_neg)
+
+    all_users = set(train_pos[:, 0]) | set(train_neg[:, 0])
+    all_items = set(train_pos[:, 1]) | set(train_neg[:, 1])
+    n_user = max(all_users) + 1
+    n_item = max(all_items) + 1
+
     train_pos_len, train_neg_len = int(len(train_pos)*0.8), int(len(train_neg)*0.8)
     test_pos, test_neg = train_pos[train_pos_len:], train_neg[train_neg_len:]
     train_pos, train_neg = train_pos[:train_pos_len], train_neg[:train_neg_len]
-    return train_pos, train_neg, test_pos, test_neg
+    return train_pos, train_neg, test_pos, test_neg, n_user, n_item
 
 
 def get_user_pos_items(train_pos, test_pos):
@@ -61,17 +75,18 @@ def get_user_pos_items(train_pos, test_pos):
 
 
 def evaluate():
-    train_pos, train_neg, test_pos, test_neg = load_data()
+    train_pos, train_neg, test_pos, test_neg, n_user, n_item = load_data()
     user_pos_items, user_train_pos_items = get_user_pos_items(train_pos=train_pos, test_pos=test_pos)
     logging.disable(logging.INFO)
-    seed_everything(1088, workers=True)
     torch.set_num_threads(8)
     auc, ndcg5 = 0, 0
     init_timeout, train_timeout, ctr_timeout, topk_timeout = False, False, False, False
     start_time, init_time, train_time, ctr_time, topk_time = time.time(), 0, 0, 0, 0
     kgrs = KGRS(train_pos=deepcopy(train_pos),
                 train_neg=deepcopy(train_neg),
-                kg_lines=open('../data/kg.txt', encoding='utf-8').readlines())
+                kg_lines=open('data/kg.txt', encoding='utf-8').readlines(),
+                n_user=n_user,
+                n_item=n_item)
     init_time = time.time() - start_time
 
     kgrs.training()
@@ -97,6 +112,25 @@ def evaluate():
 
 
 if __name__ == '__main__':
-    start = time.time()
-    print(evaluate())
-    print(time.time() - start)
+    
+    seed_everything(1088, workers=True)
+    
+    print("Training started...")
+    start_time = time.time()
+
+    # Unpack tuple returned by evluate
+    auc, ndcg5, init_timeout, train_timeout, ctr_timeout, topk_timeout, \
+    init_time, train_time, ctr_time, topk_time = evaluate()
+
+    # Display the output using formatted string
+    print("\n--- Result ---")
+    print(f"AUC Score      : {auc:.4f}")
+    print(f"nDCG@5 Score   : {ndcg5:.4f}")
+    print("------------------------")
+    print(f"⏱️ Initialization Time: {init_time:.2f} seconds")
+    print(f"⏱️ Training Time    : {train_time:.2f} seconds")
+    print(f"⏱️ CTR Evaluation Time: {ctr_time:.2f} seconds")
+    print(f"⏱️ TopK Evaluation Time: {topk_time:.2f} seconds")
+    print("------------------------")
+    total_time = time.time() - start_time
+    print(f"⏱️ Execution Time: {total_time:.2f} seconds")
